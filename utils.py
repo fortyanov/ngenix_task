@@ -5,7 +5,9 @@ from uuid import uuid4
 from string import ascii_letters, digits
 from random import randint, choice
 import xml.etree.cElementTree as ET
-from multiprocessing import Pool
+from multiprocessing import Pool, cpu_count
+
+from xmltodict import parse
 
 from consts import ZIP_COUNT, ZIP_NAME, XML_COUNT
 
@@ -44,11 +46,10 @@ def create_zip_files(directory):
 
 
 def get_zip_names(directory):
-    result = [
+    return [
         os.path.join(directory, f) for f in os.listdir(directory)
         if os.path.isfile(os.path.join(directory, f)) and f.endswith('.zip')
     ]
-    return result
 
 
 def parse_zip(name):
@@ -56,39 +57,41 @@ def parse_zip(name):
     xml_name_list = zip_file.namelist()
 
     for name in xml_name_list:
-        data = zip_file.read(name)
-        xml = ET.fromstring(data.decode('utf-8'))
-        yield xml
-
-
-def create_csv_files(xml):
-    with open('levels.csv', 'w') as f:
-        writer = csv.writer(f, delimiter=';', quotechar='|', quoting=csv.QUOTE_MINIMAL)
-
-
-def add_xml_to_levels(file):
-    pass
-
-
-def add_xml_to_objects():
-    pass
+        # yield ET.fromstring(data.decode('utf-8'))
+        yield zip_file.read(name)
 
 
 def parse_zip_name(name):
-    levels = open('levels.csv', 'wb')
-    objects = open('objects.csv', 'wb')
-
+    xmls = []
     for xml in parse_zip(name):
-        add_xml_to_levels(levels, xml)
-        add_xml_to_objects(objects, xml)
+        xml_dict = parse(xml)
+        xmls.append(xml_dict['root'])
 
-    levels.close()
-    objects.close()
+    return xmls
 
 
 def parse_zip_files(directory):
     zip_names_list = get_zip_names(directory)
-    pool = Pool()
-    pool.map(parse_zip_name, zip_names_list)
-    pool.close()
-    pool.join()
+
+    with open('levels.csv', 'w') as levels, open('objects.csv', 'w') as objects:
+        levels_writer = csv.writer(levels, lineterminator='\n', delimiter=';')
+        objects_writer = csv.writer(objects, lineterminator='\n', delimiter=';')
+
+        with Pool(cpu_count()) as pool:
+            for result in pool.imap(parse_zip_name, zip_names_list):
+                for xml in result:
+                    # xml_id = [var['@value'] for var in xml['var'] if var['@name'] == 'id'][0]
+                    [xml_id] = map(
+                        lambda var: var['@value'],
+                        filter(lambda var: var['@name'] == 'id', xml['var'])
+                    )
+
+                    levels_writer.writerow([var['@value'] for var in xml['var']])
+
+                    objects_rows = [
+                        (xml_id, obj['@name']) for obj in xml['objects']['object']
+                    ] \
+                        if isinstance(xml['objects']['object'], list) \
+                        else [(xml_id, xml['objects']['object']['@name'])]
+
+                    objects_writer.writerows(objects_rows)
